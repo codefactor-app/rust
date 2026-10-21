@@ -1,0 +1,23 @@
+[package]
+name = "codefactor"
+version = "0.1.1"
+edition = "2021"
+rust-version = "1.94"
+description = "Codefactor CLI and Cargo subcommand, with an optional Rust API"
+license = "MIT"
+repository = "https://gitlab.local/codefactor/rust"
+readme = "README.md"
+build = "build.rs"
+include = ["src/**", "tests/**", "build.rs", "release.json", "certs/**", "README.md", "LICENSE", "Cargo.lock", "examples/**", "docs/**"]
+
+[dependencies]
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+wait-timeout = "0.2"
+
+[build-dependencies]
+ureq = { version = "2.12.1", default-features = false, features = ["native-tls"] }
+native-tls = "0.2"
+serde_json = "1"
+sha2 = "0.10"

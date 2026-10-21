@@ -1,0 +1,90 @@
+# Rust: веб-сервис на axum или actix-web с раскладкой по слоям в одном крейте:
+# src/handlers (или src/routes) → src/services → src/repositories → src/domain.
+# Каталоги, которых нет в проекте, просто не дают совпадений.
+config_version: 1
+languages:
+  enabled: [rust]
+paths:
+  include: ["**"]
+  exclude:
+    - "tests/**" # Интеграционные тесты; модульные в #[cfg(test)] остаются в метриках.
+    - "benches/**"
+    - "examples/**"
+    - "**/fixtures/**"
+    - "**/generated/**"
+    - "target/**"
+    - "build.rs"
+    - "src/schema.rs" # diesel print-schema.
+    - "migrations/**" # SQL-миграции sqlx и diesel.
+vendor:
+  paths: ["vendor/**", "node_modules/**"]
+  mode: collapsed
+  parse: lazy
+limits:
+  file_lines: {warn: 400, error: 800}
+  function_lines: {warn: 40, error: 100}
+  functions_per_file: {warn: 20, error: 40}
+  methods_per_class: {warn: 15, error: 30}
+  function_params: {warn: 4, error: 7}
+  cyclomatic_complexity: {warn: 10, error: 20}
+  cognitive_complexity: {warn: 15, error: 30}
+  nesting_depth: {warn: 4, error: 6}
+  lcom4: {warn: 3, error: 8} # Несколько независимых групп функций в типе или файле.
+  module_cycle: {warn: 0} # Цикл между модулями; блокирует CI с --fail-on-warn.
+  by_path:
+    # Обработчики независимы по замыслу, а параметры — экстракторы
+    # State, Path, Query, Json и заголовки.
+    - glob: "src/handlers/**"
+      lcom4: {warn: 10, error: 20}
+      function_params: {warn: 7, error: 10}
+    - glob: "src/routes/**"
+      lcom4: {warn: 10, error: 20}
+      function_params: {warn: 7, error: 10}
+sets:
+  handlers: ["dir:src/handlers", "dir:src/routes"]
+  services: ["dir:src/services"]
+  repositories: ["dir:src/repositories"]
+  domain: ["dir:src/domain", "dir:src/models"]
+external:
+  capture_args: literal
+  max_arg_length: 160
+  redact: ['(?i)(token|password|secret|api[_-]?key)=[^&\s]+']
+  rules:
+    # Встроенный каталог знает sqlx::query, diesel execute, lapin basic_publish,
+    # reqwest get. Вызовы через цепочку (.unwrap(), builder) не разрешаются.
+    - {category: db, pattern: 'sqlx::query_as', library: sqlx, operation: query_as}
+    - {category: db, pattern: 'sqlx::query_scalar', library: sqlx, operation: query_scalar}
+    - {category: http, pattern: 'reqwest::Client::post', library: reqwest, operation: post}
+    - {category: http, pattern: 'reqwest::Client::put', library: reqwest, operation: put}
+    - {category: http, pattern: 'reqwest::Client::delete', library: reqwest, operation: delete}
+    - {category: cache, pattern: 'redis::Client::open', library: redis, operation: open}
+architecture:
+  enabled: true
+  profile: strict
+  # Направление зависимостей: handlers → services → repositories → domain.
+  # Домен не знает о репозиториях и сервисах, сервисы не знают об обработчиках.
+  layers:
+    - name: handlers
+      selectors: ["dir:src/handlers", "dir:src/routes"]
+    - name: services
+      selectors: ["dir:src/services"]
+    - name: repositories
+      selectors: ["dir:src/repositories"]
+    - name: domain
+      selectors: ["dir:src/domain", "dir:src/models"]
+  forbidden_dependencies:
+    - {from: domain, to: repositories, principle: DIP}
+    - {from: domain, to: services, principle: DIP}
+    - {from: domain, to: handlers, principle: DIP}
+    - {from: repositories, to: services, principle: DIP}
+    - {from: repositories, to: handlers, principle: DIP}
+    - {from: services, to: handlers, principle: DIP}
+  # main.rs, router.rs и state.rs собирают приложение из всех слоёв. Запись
+  # действует, только если их накрывает селектор слоя, например glob:src/**;
+  # иначе она безвредна.
+  composition_roots: ["file:src/main.rs", "file:src/router.rs", "file:src/state.rs"]
+cache:
+  enabled: true
+  path: .analyzer-cache
+output:
+  formats: [console]

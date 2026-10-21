@@ -1,0 +1,13 @@
+{
+  "version": "latest",
+  "base_url": "https://github.com/codefactor-app/core/releases/download/v{version}",
+  "platforms": [
+    "linux-x64",
+    "linux-arm64",
+    "darwin-x64",
+    "darwin-arm64",
+    "win32-x64",
+    "win32-arm64"
+  ],
+  "latest_url": "https://github.com/codefactor-app/core/releases/latest/download"
+}

@@ -1,0 +1,90 @@
+# Rust: Cargo workspace с крейтами по слоям в crates/:
+# api → application → infrastructure → domain.
+# Имена крейтов и каталогов подстройте под свой проект.
+config_version: 1
+languages:
+  enabled: [rust]
+paths:
+  include: ["**"]
+  exclude:
+    # У каждого крейта свои tests/, benches/ и examples/.
+    - "**/tests/**"
+    - "**/benches/**"
+    - "**/examples/**"
+    - "**/fixtures/**"
+    - "**/generated/**"
+    - "target/**"
+    - "**/build.rs"
+vendor:
+  paths: ["vendor/**", "node_modules/**"]
+  mode: collapsed
+  parse: lazy
+limits:
+  file_lines: {warn: 400, error: 800}
+  function_lines: {warn: 40, error: 100}
+  functions_per_file: {warn: 20, error: 40}
+  methods_per_class: {warn: 15, error: 30}
+  function_params: {warn: 4, error: 7}
+  cyclomatic_complexity: {warn: 10, error: 20}
+  cognitive_complexity: {warn: 15, error: 30}
+  nesting_depth: {warn: 4, error: 6}
+  lcom4: {warn: 3, error: 8}
+  module_cycle: {warn: 0} # Цикл между модулями, в том числе разных крейтов.
+  by_path:
+    # Обработчики крейта api: экстракторы и независимые функции.
+    - glob: "crates/api/**"
+      lcom4: {warn: 10, error: 20}
+      function_params: {warn: 7, error: 10}
+# Селектор pkg:<имя крейта> в текущем движке не находит крейты workspace;
+# работают dir:crates/<имя> и mod:crates::<имя>, как в FQN отчёта
+# crates::application::src::lib::PlaceOrder::run.
+sets:
+  domain: ["dir:crates/domain"]
+  application: ["dir:crates/application"]
+  infrastructure: ["dir:crates/infrastructure"]
+  api: ["dir:crates/api"]
+  core: ["set:domain", "set:application"]
+external:
+  capture_args: literal
+  max_arg_length: 160
+  redact: ['(?i)(token|password|secret|api[_-]?key)=[^&\s]+']
+  rules:
+    - {category: db, pattern: 'sqlx::query_as', library: sqlx, operation: query_as}
+    - {category: http, pattern: 'reqwest::Client::post', library: reqwest, operation: post}
+    - {category: cache, pattern: 'redis::Client::open', library: redis, operation: open}
+resolution:
+  rust:
+    # Статическая модель features и cfg для разрешения импортов; null — неизвестно.
+    # Укажите реальные значения проекта, например:
+    # target: x86_64-unknown-linux-gnu, features: [default], cfg: []
+    target: null
+    features: null
+    cfg: null
+architecture:
+  enabled: true
+  profile: strict
+  # Зависимости направлены внутрь, к domain; крейт api собирает остальные.
+  layers:
+    - name: domain
+      selectors: ["dir:crates/domain"]
+    - name: application
+      selectors: ["dir:crates/application"]
+    - name: infrastructure
+      selectors: ["dir:crates/infrastructure"]
+    - name: api
+      selectors: ["dir:crates/api"]
+  forbidden_dependencies:
+    - {from: domain, to: application, principle: DIP}
+    - {from: domain, to: infrastructure, principle: DIP}
+    - {from: domain, to: api, principle: DIP}
+    - {from: application, to: infrastructure, principle: DIP}
+    - {from: application, to: api, principle: DIP}
+    - {from: infrastructure, to: api, principle: DIP}
+  # main.rs крейта api входит в слой api, поэтому его сборочные вызовы
+  # исключаются из проверки границ этой записью.
+  composition_roots: ["file:crates/api/src/main.rs"]
+cache:
+  enabled: true
+  path: .analyzer-cache
+output:
+  formats: [console]

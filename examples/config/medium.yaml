@@ -1,0 +1,46 @@
+# Rust: повседневный анализ без привязки к фреймворку.
+# Пороги можно адаптировать под проект.
+config_version: 1
+languages:
+  enabled: [rust]
+paths:
+  include: ["**"] # Все поддерживаемые файлы выбранного языка, включая корневые.
+  exclude:
+    # Интеграционные тесты, бенчмарки и примеры Cargo не описывают структуру
+    # крейта. Модульные тесты в #[cfg(test)] mod tests остаются внутри
+    # исходников и попадают в метрики: используйте analyzer-ignore или baseline.
+    - "tests/**"
+    - "benches/**"
+    - "examples/**"
+    - "**/fixtures/**"
+    # Сгенерированный код (prost, tonic, bindgen) и сборочные артефакты.
+    - "**/generated/**"
+    - "target/**"
+    - "build.rs" # Скрипт сборки описывает сборку, а не структуру крейта.
+vendor:
+  # Список заменяет defaults движка; target/ исключён выше целиком,
+  # vendor/ оставлен для cargo vendor, node_modules — проектам с фронтендом.
+  paths: ["vendor/**", "node_modules/**"]
+  mode: collapsed
+  parse: lazy # none запрещает раскрытие зависимостей; full разбирает сразу.
+limits:
+  # Первые шесть порогов совпадают с defaults движка и приведены для настройки.
+  file_lines: {warn: 400, error: 800}
+  function_lines: {warn: 40, error: 100}
+  functions_per_file: {warn: 20, error: 40}
+  methods_per_class: {warn: 15, error: 30}
+  function_params: {warn: 4, error: 7}
+  cyclomatic_complexity: {warn: 10, error: 20}
+  # Структурные пороги: цикл между модулями (файлами .rs) попадает в отчёт
+  # и блокирует CI только с --fail-on-warn.
+  nesting_depth: {warn: 4, error: 6}
+  cognitive_complexity: {warn: 15, error: 30}
+  module_cycle: {warn: 0}
+architecture:
+  enabled: true
+  profile: strict
+cache:
+  enabled: true
+  path: .analyzer-cache
+output:
+  formats: [console] # Для машинного stdout замените на [json].
