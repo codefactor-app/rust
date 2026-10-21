@@ -4,6 +4,9 @@
 //! println!("{}", result.data["summary"]["functions"]);
 //! # Ok::<(), codefactor::Error>(())
 //! ```
+#[doc(hidden)]
+pub mod core;
+mod release;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
@@ -53,6 +56,7 @@ pub struct ScanOptions {
 pub struct Codefactor {
     binary: PathBuf,
     timeout: Duration,
+    managed: bool,
 }
 
 impl Codefactor {
@@ -60,64 +64,18 @@ impl Codefactor {
         if let Some(path) = env::var_os("CODEFACTOR_BINARY") {
             return Ok(Self::with_binary(path));
         }
-        let cache = env::var_os("CODEFACTOR_CACHE_DIR")
-            .map(PathBuf::from)
-            .or_else(|| env::var_os("XDG_CACHE_HOME").map(|p| PathBuf::from(p).join("codefactor")))
-            .or_else(|| env::var_os("LOCALAPPDATA").map(|p| PathBuf::from(p).join("codefactor")))
-            .or_else(|| env::var_os("HOME").map(|p| PathBuf::from(p).join(".cache/codefactor")))
-            .ok_or_else(|| {
-                Error::Invalid("Set CODEFACTOR_CACHE_DIR for engine extraction".into())
-            })?;
-        let directory = cache
-            .join(env!("CODEFACTOR_ENGINE_VERSION"))
-            .join(env!("CODEFACTOR_ENGINE_TARGET"))
-            .join(env!("CODEFACTOR_ENGINE_SHA256"));
-        fs::create_dir_all(&directory)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
-        }
-        let binary = directory.join(if cfg!(windows) {
-            "codefactor.exe"
-        } else {
-            "codefactor"
-        });
-        let valid = binary.is_file()
-            && format!("{:x}", Sha256::digest(fs::read(&binary)?))
-                == env!("CODEFACTOR_ENGINE_SHA256");
-        if !valid {
-            let temporary = directory.join(format!(
-                ".engine-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_nanos()
-            ));
-            fs::write(&temporary, ENGINE)?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                fs::set_permissions(&temporary, fs::Permissions::from_mode(0o755))?;
-            }
-            if let Err(error) = fs::rename(&temporary, &binary) {
-                let _ = fs::remove_file(&temporary);
-                if !binary.is_file()
-                    || format!("{:x}", Sha256::digest(fs::read(&binary)?))
-                        != env!("CODEFACTOR_ENGINE_SHA256")
-                {
-                    return Err(error.into());
-                }
-            }
-        }
-        Ok(Self::with_binary(binary))
+        let binary = core::resolve(&core::Context::default())?;
+        Ok(Self {
+            managed: true,
+            ..Self::with_binary(binary)
+        })
     }
 
     pub fn with_binary(path: impl Into<PathBuf>) -> Self {
         Self {
             binary: path.into(),
             timeout: Duration::from_secs(120),
+            managed: false,
         }
     }
 
@@ -206,7 +164,12 @@ impl Codefactor {
     }
 
     fn run(&self, args: Vec<std::ffi::OsString>) -> Result<ResultData, Error> {
-        let mut child = Command::new(&self.binary)
+        let binary = if self.managed {
+            core::resolve(&core::context(&args))?
+        } else {
+            self.binary.clone()
+        };
+        let mut child = Command::new(&binary)
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -274,4 +237,56 @@ fn absolute(path: &Path) -> Result<std::ffi::OsString, Error> {
         env::current_dir()?.join(path)
     }
     .into_os_string())
+}
+
+fn bundled_binary() -> Result<PathBuf, Error> {
+    let cache = env::var_os("CODEFACTOR_CACHE_DIR")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("XDG_CACHE_HOME").map(|p| PathBuf::from(p).join("codefactor")))
+        .or_else(|| env::var_os("LOCALAPPDATA").map(|p| PathBuf::from(p).join("codefactor")))
+        .or_else(|| env::var_os("HOME").map(|p| PathBuf::from(p).join(".cache/codefactor")))
+        .ok_or_else(|| Error::Invalid("Set CODEFACTOR_CACHE_DIR for engine extraction".into()))?;
+    let directory = cache
+        .join(env!("CODEFACTOR_ENGINE_VERSION"))
+        .join(env!("CODEFACTOR_ENGINE_TARGET"))
+        .join(env!("CODEFACTOR_ENGINE_SHA256"));
+    fs::create_dir_all(&directory)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
+    }
+    let binary = directory.join(if cfg!(windows) {
+        "codefactor.exe"
+    } else {
+        "codefactor"
+    });
+    let valid = binary.is_file()
+        && format!("{:x}", Sha256::digest(fs::read(&binary)?)) == env!("CODEFACTOR_ENGINE_SHA256");
+    if !valid {
+        let temporary = directory.join(format!(
+            ".engine-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::write(&temporary, ENGINE)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&temporary, fs::Permissions::from_mode(0o755))?;
+        }
+        if let Err(error) = fs::rename(&temporary, &binary) {
+            let _ = fs::remove_file(&temporary);
+            if !binary.is_file()
+                || format!("{:x}", Sha256::digest(fs::read(&binary)?))
+                    != env!("CODEFACTOR_ENGINE_SHA256")
+            {
+                return Err(error.into());
+            }
+        }
+    }
+    Ok(binary)
 }

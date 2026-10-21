@@ -1,107 +1,17 @@
+#[path = "src/release.rs"]
+mod release;
+use release::{download, release_base, valid_version};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::{env, fs, io::Read, path::PathBuf, sync::Arc, time::Duration};
-
-fn download(url: &str, limit: u64) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    if !url.starts_with("https://") {
-        return Err("Codefactor release URL must use HTTPS".into());
-    }
-    let mut builder = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(60))
-        .redirects(0);
-    let ca = env::var("CODEFACTOR_CA_BUNDLE")
-        .ok()
-        .map(fs::read)
-        .transpose()?;
-    let local_ca = url
-        .starts_with("https://gitlab.local/")
-        .then(|| include_bytes!("certs/gitlab.local.pem").as_slice().to_vec());
-    let mut tls = native_tls::TlsConnector::builder();
-    if let Some(ca) = ca.or(local_ca) {
-        tls.add_root_certificate(native_tls::Certificate::from_pem(&ca)?);
-    }
-    builder = builder.tls_connector(Arc::new(tls.build()?));
-    let agent = builder.build();
-    let mut url = url.to_owned();
-    for redirects in 0..=5 {
-        if !url.starts_with("https://") {
-            return Err("Codefactor release URL must use HTTPS".into());
-        }
-        let mut request = agent.get(&url);
-        let mut authenticated = false;
-        if redirects == 0 && !url.starts_with("https://github.com/") {
-            if let Ok(token) = env::var("CODEFACTOR_TOKEN") {
-                request = request.set("PRIVATE-TOKEN", &token);
-                authenticated = true;
-            } else if let Ok(token) =
-                env::var("CODEFACTOR_JOB_TOKEN").or_else(|_| env::var("CI_JOB_TOKEN"))
-            {
-                request = request.set("JOB-TOKEN", &token);
-                authenticated = true;
-            }
-        }
-        let response = request.call()?;
-        if matches!(response.status(), 301 | 302 | 303 | 307 | 308) {
-            if authenticated || redirects == 5 {
-                return Err("Unsafe Codefactor release redirect".into());
-            }
-            url = response
-                .header("Location")
-                .ok_or("Missing redirect location")?
-                .to_owned();
-            continue;
-        }
-        if response.status() != 200 {
-            return Err("Codefactor download failed".into());
-        }
-        let mut bytes = Vec::new();
-        response
-            .into_reader()
-            .take(limit + 1)
-            .read_to_end(&mut bytes)?;
-        if bytes.len() as u64 > limit {
-            return Err("Codefactor download exceeded size limit".into());
-        }
-        return Ok(bytes);
-    }
-    Err("Too many Codefactor release redirects".into())
-}
-
-fn release_base(config: &Value, version: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let supplied = env::var("CODEFACTOR_RELEASE_BASE_URL").ok();
-    if version == "latest" && supplied.is_none() {
-        return Ok(config["latest_url"]
-            .as_str()
-            .ok_or("Missing latest release URL")?
-            .trim_end_matches('/')
-            .into());
-    }
-    let base = supplied.unwrap_or(
-        config["base_url"]
-            .as_str()
-            .ok_or("Missing release URL")?
-            .into(),
-    );
-    Ok(if base.contains("{version}") {
-        base.trim_end_matches('/').replace("{version}", version)
-    } else {
-        format!("{}/{version}", base.trim_end_matches('/'))
-    })
-}
-
-fn valid_version(version: &str) -> bool {
-    let parts: Vec<_> = version.split('.').collect();
-    parts.len() == 3
-        && parts
-            .iter()
-            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
-}
+use std::{env, fs, path::PathBuf};
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=release.json");
+    println!("cargo:rerun-if-changed=src/release.rs");
     println!("cargo:rerun-if-changed=certs/gitlab.local.pem");
     for name in [
         "CODEFACTOR_BINARY",
+        "CODEFACTOR_CORE_VERSION",
         "CODEFACTOR_RELEASE_BASE_URL",
         "CODEFACTOR_TOKEN",
         "CODEFACTOR_JOB_TOKEN",
@@ -112,7 +22,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         println!("cargo:rerun-if-env-changed={name}");
     }
     let config: Value = serde_json::from_str(include_str!("release.json"))?;
-    let requested = config["version"].as_str().ok_or("Missing engine version")?;
+    let selected = env::var("CODEFACTOR_CORE_VERSION")
+        .unwrap_or_else(|_| config["version"].as_str().unwrap_or("latest").into());
+    let requested = selected.as_str();
+    if env::var_os("CODEFACTOR_BINARY").is_none()
+        && requested != "latest"
+        && !valid_version(requested)
+    {
+        return Err("core.version must be latest or X.Y.Z".into());
+    }
     let mut version = "custom".to_owned();
     let target = env::var("TARGET")?;
     let supplied_binary = env::var_os("CODEFACTOR_BINARY");
