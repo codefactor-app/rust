@@ -22,6 +22,9 @@ pub fn context(args: &[OsString]) -> Context {
     let mut positional = Vec::new();
     let mut i = 0;
     const VALUES: &[&str] = &[
+        "--baseline",
+        "--baseline-mode",
+        "--capture",
         "--config",
         "--file",
         "--root",
@@ -469,5 +472,35 @@ mod tests {
             .unwrap();
         assert_eq!(result.data["version"], "9.8.7");
         fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod baseline_context_tests {
+    use super::*;
+    #[test]
+    fn snapshot_options_do_not_replace_the_analysis_root() {
+        let args = [
+            "scan",
+            "--baseline",
+            "accepted.yaml",
+            "--baseline-mode",
+            "regressions",
+            "project",
+        ];
+        let parsed = context(&args.map(OsString::from));
+        assert_eq!(parsed.root, Some(PathBuf::from("project")));
+        let args = [
+            "baseline",
+            "create",
+            "--capture",
+            "all",
+            "--root",
+            "project",
+        ];
+        assert_eq!(
+            context(&args.map(OsString::from)).root,
+            Some(PathBuf::from("project"))
+        );
     }
 }
